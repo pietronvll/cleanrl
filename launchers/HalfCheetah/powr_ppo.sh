@@ -1,5 +1,19 @@
 #!/bin/bash
+#PBS -l select=1:ncpus=4:ngpus=1
+#PBS -l walltime=04:00:00
+#PBS -j oe
+
+cd $PBS_O_WORKDIR
+
+SEED=${SEED:-1}
+
+# Load environment
+source ~/.bashrc
+mamba activate cleanrl
+
 python cleanrl/powr/ppo_continuous_action.py \
+    --exp_name "powr_ppo" \
+    --seed $SEED \
     --env_id "HalfCheetah-v4" \
     --num_envs 1 \
     --num_steps 2048 \
@@ -14,4 +28,4 @@ python cleanrl/powr/ppo_continuous_action.py \
     --max_grad_norm 0.5 \
     --norm_adv \
     --no-dump_buffer \
-    --capture_video
+    --capture_video \
