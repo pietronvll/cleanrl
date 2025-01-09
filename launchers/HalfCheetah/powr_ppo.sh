@@ -12,7 +12,7 @@ source ~/.bashrc
 mamba activate cleanrl
 
 python cleanrl/powr/ppo_continuous_action.py \
-    --exp_name "powr_ppo" \
+    --exp_name "powr_ppo_large" \
     --seed $SEED \
     --env_id "HalfCheetah-v4" \
     --num_envs 1 \

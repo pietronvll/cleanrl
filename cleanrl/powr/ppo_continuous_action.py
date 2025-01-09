@@ -97,13 +97,13 @@ class Args:
     """the maximum norm for the gradient clipping"""
     target_kl: Optional[float] = None
     """the target KL divergence threshold"""
-    num_rfs: int = 2048
+    num_rfs: int = 4096
     """the number of random features"""
     rf_seed: int = 0
     """the seed for the random features"""
-    reg: float = 1e-4
+    reg: float = 1e-5
     """regularization fop the POWR world model"""
-    buffer_size: int = 2**15
+    buffer_size: int = 2**18
     """size of the replay buffer"""
     dump_buffer: bool = False
     """saving the replay buffer to disk"""
