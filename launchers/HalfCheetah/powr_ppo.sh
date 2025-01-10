@@ -12,13 +12,13 @@ source ~/.bashrc
 mamba activate cleanrl
 
 python cleanrl/powr/ppo_continuous_action.py \
-    --exp_name "powr_ppo_large" \
+    --exp_name "powr_ppo_large_big-lr" \
     --seed $SEED \
     --env_id "HalfCheetah-v4" \
     --num_envs 1 \
     --num_steps 2048 \
     --total_timesteps 1000000 \
-    --learning_rate 3e-4 \
+    --learning_rate 3e-3 \
     --num_minibatches 32 \
     --update_epochs 10 \
     --ent_coef 0.0 \

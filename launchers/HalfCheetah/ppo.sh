@@ -12,9 +12,9 @@ source ~/.bashrc
 mamba activate cleanrl
 
 python cleanrl/ppo_continuous_action.py \
-    --exp_name "ppo" \
+    --exp_name "ppo_big-lr" \
     --env-id "HalfCheetah-v4" \
-    --learning-rate 0.0003 \
+    --learning-rate 0.003 \
     --seed $SEED \
     --total-timesteps 1000000 \
     --num-envs 1 \

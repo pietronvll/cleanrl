@@ -31,7 +31,7 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = True
+    track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
@@ -267,11 +267,6 @@ class SoftQNetwork(nn.Module):
         )
         self.register_buffer("action_value_weights", torch.zeros((latent_dim,)))
 
-
-        # self.fc1 = nn.Linear(np.array(env.single_observation_space.shape).prod() + np.prod(env.single_action_space.shape), 256)
-        # self.fc2 = nn.Linear(256, 256)
-        # self.fc3 = nn.Linear(256, 1)
-
     def orf_embed(self, states, actions):
         x = torch.cat([states, actions], dim=-1)
         x = self.orf(x)
@@ -281,12 +276,7 @@ class SoftQNetwork(nn.Module):
         x = self.orf_embed(x, a)
         action_value_fn = torch.einsum("...d, d -> ...", x, self.action_value_weights)
         return action_value_fn
-    
-        # x = torch.cat([x, a], 1)
-        # x = F.relu(self.fc1(x))
-        # x = F.relu(self.fc2(x))
-        # x = self.fc3(x)
-        # return x
+
     def compute_covariances(self, rb: ReplayBuffer, actor: Actor, num_mean_samples=10):
         obs = rb.observations if rb.full else rb.observations[: rb.pos]
         next_obs = rb.next_observations if rb.full else rb.next_observations[: rb.pos]
@@ -301,12 +291,9 @@ class SoftQNetwork(nn.Module):
         Y = torch.zeros_like(X)
 
         # MC mean of the features
-        # TODO:check actor mean and logstd
-        action_mean, action_logstd = actor(b_obs)
-        action_std = torch.exp(action_logstd)
-        probs = Normal(action_mean, action_std)
         for _ in range(num_mean_samples):
-            Y += self.orf_embed(b_next_obs, probs.sample())
+            action, _, _ = actor.get_action(b_next_obs)
+            Y += self.orf_embed(b_next_obs, action)
         Y /= num_mean_samples
 
         C0 = covariance(X)
@@ -327,8 +314,6 @@ class SoftQNetwork(nn.Module):
         T_ridge.diagonal().add_(1)
         sol = torch.linalg.solve(T_ridge, reward_KRR)
         self.action_value_weights.copy_(sol[:, 0])
-
-
 
 
 if __name__ == "__main__":
@@ -378,23 +363,6 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     actor = Actor(envs).to(device)
     qf1 = SoftQNetwork(envs, args.rf_seed).to(device)
     qf2 = SoftQNetwork(envs, (args.rf_seed+1)).to(device)
-    qf1_target = SoftQNetwork(envs).to(device)
-    qf2_target = SoftQNetwork(envs).to(device)
-    for name, buff in qf1.named_buffers():
-        # if name starts with orf it means it is a random feature, so copy in qf1_target.rff
-        if name.startswith("orf"):
-            qf1_target.orf._buffers[name.split(".")[1]].copy_(buff)
-        else:
-            qf1_target._buffers[name].copy_(buff)
-    for name, buff in qf2.named_buffers():
-        if name.startswith("orf"):
-            qf2_target.orf._buffers[name.split(".")[1]].copy_(buff)
-        else:
-            qf2_target._buffers[name].copy_(buff)
-
-    qf1_target.load_state_dict(qf1.state_dict()) # TODO non so se funziona
-    qf2_target.load_state_dict(qf2.state_dict())
-    # q_optimizer = optim.Adam(list(qf1.parameters()) + list(qf2.parameters()), lr=args.q_lr)
     actor_optimizer = optim.Adam(list(actor.parameters()), lr=args.policy_lr)
 
     # Automatic entropy tuning
@@ -452,8 +420,9 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             data = rb.sample(args.batch_size)
 
             # Fitting the world model
-            qf1.fit_world_model(rb, actor)
-            qf2.fit_world_model(rb, actor)
+            with torch.no_grad():
+                qf1.fit_world_model(rb, actor)
+                qf2.fit_world_model(rb, actor)
 
             if global_step % args.policy_frequency == 0:  # TD 3 Delayed update support
                 for _ in range(
@@ -479,47 +448,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                         a_optimizer.step()
                         alpha = log_alpha.exp().item()
 
-            # update the target networks
-            if global_step % args.target_network_frequency == 0:
-                # Update the target network reward weights copied from qfi
-            
-                for name, buff in qf1.named_buffers():
-                    if "reward_weights" in name or  "transition_weights" in name:
-                        qf1_target._buffers[name].copy_(buff)
-                    elif "action_value_weights" in name:
-                        qf1_target._buffers[name].copy_(
-                            args.tau * buff + (1 - args.tau) * qf1_target._buffers[name]
-                        )
-                    elif "orf" in name:
-                        qf1_target.orf._buffers[name.split(".")[1]].copy_(buff)
-                    else:
-                        raise ValueError(f"Unknown buffer {name}")
-                
-                for name, buff in qf2.named_buffers():
-                    if "reward_weights" in name or  "transition_weights" in name:
-                        qf2_target._buffers[name].copy_(buff)
-                    elif "action_value_weights" in name:
-                        qf2_target._buffers[name].copy_(
-                            args.tau * buff + (1 - args.tau) * qf2_target._buffers[name]
-                        )
-                    elif "orf" in name:
-                        qf2_target.orf._buffers[name.split(".")[1]].copy_(buff)
-                    else:
-                        raise ValueError(f"Unknown buffer {name}")
-                
-                
-
-                # for param, target_param in zip(qf1.parameters(), qf1_target.parameters()):
-                #     target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
-                # for param, target_param in zip(qf2.parameters(), qf2_target.parameters()):
-                #     target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
-
             if global_step % 100 == 0:
-                # writer.add_scalar("losses/qf1_values", qf1_a_values.mean().item(), global_step)
-                # writer.add_scalar("losses/qf2_values", qf2_a_values.mean().item(), global_step)
-                # writer.add_scalar("losses/qf1_loss", qf1_loss.item(), global_step)
-                # writer.add_scalar("losses/qf2_loss", qf2_loss.item(), global_step)
-                # writer.add_scalar("losses/qf_loss", qf_loss.item() / 2.0, global_step)
                 writer.add_scalar("losses/actor_loss", actor_loss.item(), global_step)
                 writer.add_scalar("losses/alpha", alpha, global_step)
                 print("SPS:", int(global_step / (time.time() - start_time)))
