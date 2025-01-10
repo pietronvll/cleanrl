@@ -419,12 +419,13 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         if global_step > args.learning_starts:
             data = rb.sample(args.batch_size)
 
-            # Fitting the world model
-            with torch.no_grad():
-                qf1.fit_world_model(rb, actor)
-                qf2.fit_world_model(rb, actor)
 
             if global_step % args.policy_frequency == 0:  # TD 3 Delayed update support
+                # Fitting the world model
+                with torch.no_grad():
+                    qf1.fit_world_model(rb, actor)
+                    qf2.fit_world_model(rb, actor)
+                    
                 for _ in range(
                     args.policy_frequency
                 ):  # compensate for the delay by doing 'actor_update_interval' instead of 1

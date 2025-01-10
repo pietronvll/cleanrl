@@ -10,3 +10,6 @@
 8. Changed the q_loss computations and updates with the world model fitting 
 9. Added q_targets copy during creation and training
 10. I m not sure about compute covariance. Added actor param in fit and compute covariances. Modified line 305, TO CHECK action_mean and action_logstd
+
+## Pie Notes
+- It is too slow, as it is re-fitting the world model at every step. 
