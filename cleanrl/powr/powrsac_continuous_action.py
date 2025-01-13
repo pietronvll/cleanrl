@@ -1,22 +1,51 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/sac/#sac_continuous_actionpy
+import logging
 import os
 import random
 import time
-from math import ceil, pi, sqrt
 from dataclasses import dataclass
+from functools import wraps
+from math import ceil, pi, sqrt
 from typing import Optional, Union
 
 import gymnasium as gym
 import numpy as np
-import torch
 import scipy.stats
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.distributions.normal import Normal
 import tyro
 from stable_baselines3.common.buffers import ReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
+
+
+def setup_logging(run_name):
+    os.makedirs("logs", exist_ok=True)
+
+    # Clear previous handlers
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[logging.FileHandler(f"logs/{run_name}.log"), logging.StreamHandler()],
+    )
+
+
+def log_time(func):
+    """Decorator to time and log function execution."""
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = func(*args, **kwargs)
+        elapsed = time.perf_counter() - start
+        logging.info(f"{func.__name__} took {elapsed:.4f} seconds")
+        return result
+
+    return wrapper
 
 
 @dataclass
@@ -61,6 +90,8 @@ class Args:
     """the learning rate of the Q network network optimizer"""
     policy_frequency: int = 2
     """the frequency of training policy (delayed)"""
+    critic_frequency: int = 4
+    """the frequency of training critic (delayed)"""
     target_network_frequency: int = 1  # Denis Yarats' implementation delays this by 2.
     """the frequency of updates for the target nerworks"""
     alpha: float = 0.2
@@ -85,6 +116,7 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         return env
 
     return thunk
+
 
 def covariance(
     X: torch.Tensor,
@@ -129,7 +161,8 @@ def covariance(
             _X = _X - _X.mean(dim=0, keepdim=True)
             _Y = _Y - _Y.mean(dim=0, keepdim=True)
         return torch.mm(_X.T, _Y)
-    
+
+
 class OrthogonalRandomFeatures(torch.nn.Module):
     def __init__(
         self,
@@ -155,9 +188,7 @@ class OrthogonalRandomFeatures(torch.nn.Module):
             "random_offset", torch.rand(self.num_random_features) * 2 * pi
         )
         self.register_buffer("length_scale", length_scale)
-        self.layer_norm = nn.LayerNorm(
-            self.input_dim, bias=False, elementwise_affine=False
-        )
+        self.batch_norm = nn.BatchNorm1d(self.input_dim, affine=False)
 
     def _sample_orf_matrix(self, input_dim, num_random_features, rng_seed):
         num_folds = ceil(num_random_features / input_dim)
@@ -193,7 +224,12 @@ class OrthogonalRandomFeatures(torch.nn.Module):
         return W.T
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        inputs = self.layer_norm(inputs)
+        if inputs.ndim == 3:
+            inputs = self.batch_norm(inputs.swapaxes(1, 2)).swapaxes(
+                1, 2
+            )  # Shortcut to avoid setting the length_scale. See if it works.
+        else:
+            inputs = self.batch_norm(inputs)
         Z = torch.tensordot(
             inputs
             / self.length_scale,  # Length_scale should broadcast to the batch dimension
@@ -203,6 +239,7 @@ class OrthogonalRandomFeatures(torch.nn.Module):
         assert self.random_offset.shape[0] == Z.shape[-1]
         Z = torch.cos(Z + self.random_offset) / sqrt(0.5 * self.num_random_features)
         return Z  # [batch_size, num_random_features]
+
 
 LOG_STD_MAX = 2
 LOG_STD_MIN = -5
@@ -217,10 +254,18 @@ class Actor(nn.Module):
         self.fc_logstd = nn.Linear(256, np.prod(env.single_action_space.shape))
         # action rescaling
         self.register_buffer(
-            "action_scale", torch.tensor((env.action_space.high - env.action_space.low) / 2.0, dtype=torch.float32)
+            "action_scale",
+            torch.tensor(
+                (env.action_space.high - env.action_space.low) / 2.0,
+                dtype=torch.float32,
+            ),
         )
         self.register_buffer(
-            "action_bias", torch.tensor((env.action_space.high + env.action_space.low) / 2.0, dtype=torch.float32)
+            "action_bias",
+            torch.tensor(
+                (env.action_space.high + env.action_space.low) / 2.0,
+                dtype=torch.float32,
+            ),
         )
 
     def forward(self, x):
@@ -229,7 +274,9 @@ class Actor(nn.Module):
         mean = self.fc_mean(x)
         log_std = self.fc_logstd(x)
         log_std = torch.tanh(log_std)
-        log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (log_std + 1)  # From SpinUp / Denis Yarats
+        log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (
+            log_std + 1
+        )  # From SpinUp / Denis Yarats
 
         return mean, log_std
 
@@ -247,9 +294,21 @@ class Actor(nn.Module):
         mean = torch.tanh(mean) * self.action_scale + self.action_bias
         return action, log_prob, mean
 
+    def MC_sample(self, x, num_samples: int = 10):
+        mean, log_std = self(x)
+        std = log_std.exp()
+        normal = torch.distributions.Normal(mean, std)
+        x_t = normal.sample(
+            (num_samples,)
+        )  # for reparameterization trick (mean + std * N(0,1))
+        y_t = torch.tanh(x_t)
+        actions = y_t * self.action_scale + self.action_bias
+        return actions
+
+
 # ALGO LOGIC: initialize agent here:
 class SoftQNetwork(nn.Module):
-    def __init__(self, env, rf_seed = 0):
+    def __init__(self, env, rf_seed=0):
         super().__init__()
         state_dim = np.prod(env.observation_space.shape)
         action_dim = np.prod(env.action_space.shape)
@@ -271,7 +330,7 @@ class SoftQNetwork(nn.Module):
         x = torch.cat([states, actions], dim=-1)
         x = self.orf(x)
         return x
-    
+
     def forward(self, x, a):
         x = self.orf_embed(x, a)
         action_value_fn = torch.einsum("...d, d -> ...", x, self.action_value_weights)
@@ -287,12 +346,13 @@ class SoftQNetwork(nn.Module):
         b_next_obs = rb.to_torch(rb.swap_and_flatten(next_obs)).float()
         b_rewards = rb.to_torch(rb.swap_and_flatten(rewards)).float()
         b_actions = rb.to_torch(rb.swap_and_flatten(actions)).float()
+
         X = self.orf_embed(b_obs, b_actions)
         Y = torch.zeros_like(X)
 
+        actions = actor.MC_sample(b_next_obs)
         # MC mean of the features
-        for _ in range(num_mean_samples):
-            action, _, _ = actor.get_action(b_next_obs)
+        for action in actions:
             Y += self.orf_embed(b_next_obs, action)
         Y /= num_mean_samples
 
@@ -300,9 +360,9 @@ class SoftQNetwork(nn.Module):
         C1 = covariance(X, Y)
         reward_coeffs = covariance(X, b_rewards)
         return C0, C1, reward_coeffs
-    
+
     def fit_world_model(self, rb: ReplayBuffer, actor: Actor):
-        C0, C1, b = self.compute_covariances(rb, actor)
+        C0, C1, b = log_time(self.compute_covariances)(rb, actor)
         C0.diagonal().add_(args.reg)  # Add regularization
         C0_chol = torch.linalg.cholesky(C0)
         T_ridge = torch.cholesky_solve(C1, C0_chol)
@@ -328,6 +388,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
     args = tyro.cli(Args)
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    setup_logging(run_name)
     if args.track:
         import wandb
 
@@ -343,7 +404,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     writer = SummaryWriter(f"runs/{run_name}")
     writer.add_text(
         "hyperparameters",
-        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
+        "|param|value|\n|-|-|\n%s"
+        % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
     )
 
     # TRY NOT TO MODIFY: seeding
@@ -355,19 +417,25 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
-    envs = gym.vector.SyncVectorEnv([make_env(args.env_id, args.seed, 0, args.capture_video, run_name)])
-    assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
+    envs = gym.vector.SyncVectorEnv(
+        [make_env(args.env_id, args.seed, 0, args.capture_video, run_name)]
+    )
+    assert isinstance(envs.single_action_space, gym.spaces.Box), (
+        "only continuous action space is supported"
+    )
 
     max_action = float(envs.single_action_space.high[0])
 
     actor = Actor(envs).to(device)
     qf1 = SoftQNetwork(envs, args.rf_seed).to(device)
-    qf2 = SoftQNetwork(envs, (args.rf_seed+1)).to(device)
+    qf2 = SoftQNetwork(envs, (args.rf_seed + 1)).to(device)
     actor_optimizer = optim.Adam(list(actor.parameters()), lr=args.policy_lr)
 
     # Automatic entropy tuning
     if args.autotune:
-        target_entropy = -torch.prod(torch.Tensor(envs.single_action_space.shape).to(device)).item()
+        target_entropy = -torch.prod(
+            torch.Tensor(envs.single_action_space.shape).to(device)
+        ).item()
         log_alpha = torch.zeros(1, requires_grad=True, device=device)
         alpha = log_alpha.exp().item()
         a_optimizer = optim.Adam([log_alpha], lr=args.q_lr)
@@ -389,7 +457,9 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     for global_step in range(args.total_timesteps):
         # ALGO LOGIC: put action logic here
         if global_step < args.learning_starts:
-            actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
+            actions = np.array(
+                [envs.single_action_space.sample() for _ in range(envs.num_envs)]
+            )
         else:
             actions, _, _ = actor.get_action(torch.Tensor(obs).to(device))
             actions = actions.detach().cpu().numpy()
@@ -400,9 +470,15 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         if "final_info" in infos:
             for info in infos["final_info"]:
-                print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
-                writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
-                writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
+                print(
+                    f"global_step={global_step}, episodic_return={info['episode']['r']}"
+                )
+                writer.add_scalar(
+                    "charts/episodic_return", info["episode"]["r"], global_step
+                )
+                writer.add_scalar(
+                    "charts/episodic_length", info["episode"]["l"], global_step
+                )
                 break
 
         # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation`
@@ -417,21 +493,28 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
-            data = rb.sample(args.batch_size)
-
-
-            if global_step % args.policy_frequency == 0:  # TD 3 Delayed update support
+            if global_step % args.critic_frequency == 0:
                 # Fitting the world model
                 with torch.no_grad():
                     qf1.fit_world_model(rb, actor)
                     qf2.fit_world_model(rb, actor)
-                    
+
+            data = rb.sample(args.batch_size)
+            if global_step % args.policy_frequency == 0:  # TD 3 Delayed update support
                 for _ in range(
                     args.policy_frequency
                 ):  # compensate for the delay by doing 'actor_update_interval' instead of 1
                     pi, log_pi, _ = actor.get_action(data.observations)
+                    qf1.train()
                     qf1_pi = qf1(data.observations, pi)
+                    qf1.eval()
+                    # x = torch.cat([data.observations, data.actions], dim=-1)
+                    # inputs = qf1.orf.batch_norm(x)
+                    # logging.info(f"m: {inputs.mean(0)} | s: {inputs.std(0)}")
+
+                    qf2.train()
                     qf2_pi = qf2(data.observations, pi)
+                    qf2.eval()
                     min_qf_pi = torch.min(qf1_pi, qf2_pi)
                     actor_loss = ((alpha * log_pi) - min_qf_pi).mean()
 
@@ -442,7 +525,9 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                     if args.autotune:
                         with torch.no_grad():
                             _, log_pi, _ = actor.get_action(data.observations)
-                        alpha_loss = (-log_alpha.exp() * (log_pi + target_entropy)).mean()
+                        alpha_loss = (
+                            -log_alpha.exp() * (log_pi + target_entropy)
+                        ).mean()
 
                         a_optimizer.zero_grad()
                         alpha_loss.backward()
@@ -453,9 +538,15 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 writer.add_scalar("losses/actor_loss", actor_loss.item(), global_step)
                 writer.add_scalar("losses/alpha", alpha, global_step)
                 print("SPS:", int(global_step / (time.time() - start_time)))
-                writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+                writer.add_scalar(
+                    "charts/SPS",
+                    int(global_step / (time.time() - start_time)),
+                    global_step,
+                )
                 if args.autotune:
-                    writer.add_scalar("losses/alpha_loss", alpha_loss.item(), global_step)
+                    writer.add_scalar(
+                        "losses/alpha_loss", alpha_loss.item(), global_step
+                    )
 
     envs.close()
     writer.close()

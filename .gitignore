@@ -131,3 +131,6 @@ venv.bak/
 .mypy_cache/
 logs/
 videos/
+
+#notebooks
+scratch.ipynb

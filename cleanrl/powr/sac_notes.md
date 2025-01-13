@@ -13,3 +13,4 @@
 
 ## Pie Notes
 - It is too slow, as it is re-fitting the world model at every step. 
+- Fitting plain SAC up to 150k steps and saving the replay buffer. Then analysing the performances offline.

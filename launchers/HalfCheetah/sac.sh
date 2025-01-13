@@ -5,13 +5,13 @@
 
 cd $PBS_O_WORKDIR
 
-# Use an optional experiment argument passed via qsub -v EXPERIMENT=...
 SEED=${SEED:-1}
+
 # Load environment
 source ~/.bashrc
 mamba activate cleanrl
 
-python cleanrl/powr/powrsac_continuous_action.py \
-    --exp_name "powr-sac" \
+python cleanrl/sac_continuous_action.py \
+    --exp_name "sac" \
     --env-id "HalfCheetah-v4" \
     --seed $SEED \
