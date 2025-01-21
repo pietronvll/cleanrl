@@ -15,6 +15,8 @@ from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.type_aliases import ReplayBufferSamples
 from torch.utils.tensorboard import SummaryWriter
 
+from contrastive_repr import SpectralConLoss
+
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_squared_error
 
@@ -29,7 +31,7 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = True
+    track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
@@ -61,15 +63,27 @@ class Args:
     """the learning rate of the policy network optimizer"""
     q_lr: float = 3e-4
     """the learning rate of the Q network network optimizer"""
-    cont_lr: float = 0.05
+    feat_lr: float = 1e-3
     """the learning rate of the contrastive learning network optimizer"""
     policy_frequency: int = 2
     """the frequency of training policy (delayed)"""
     target_network_frequency: int = 1  # Denis Yarats' implementation delays this by 2.
     """the frequency of updates for the target nerworks"""
-    alpha: float = 0 ############## TODO 0.2 default
+    extra_feature_steps: int = 3
+    """the number of extra feature steps to train Mu and Phi"""
+    use_feature_target: bool = True
+    """whether to use feature target""" # NOT implemented yet
+    feature_dim: int = 256
+    """the dimension of the feature"""
+    hidden_dim: int = 256  
+    """the hidden dimension of the neural networks"""
+    freeze_feature: bool = False
+    """whether to freeze the feature parameters"""
+    reward_prediction_loss: bool = True
+    """whether to use reward prediction loss"""
+    alpha: float = 0
     """Entropy regularization coefficient."""
-    autotune: bool = False ############## TODO True default
+    autotune: bool = False
     """automatic tuning of the entropy coefficient"""
 
 
@@ -112,19 +126,106 @@ class ReprReplayBuffer(ReplayBuffer):
         )
         return ReplayBufferSamples(*tuple(map(self.to_torch, data)))
 
+class Phi(nn.Module):
+    """
+    phi: s, a -> z_phi in R^d
+    """
+    def __init__(
+        self, 
+        state_dim,
+        action_dim,
+        feature_dim=1024,
+        hidden_dim=1024,
+        ):
+
+        super(Phi, self).__init__()
+
+        self.l1 = nn.Linear(state_dim + action_dim, hidden_dim)
+        self.l2 = nn.Linear(hidden_dim, hidden_dim)
+        self.l3 = nn.Linear(hidden_dim, feature_dim)
+
+    def forward(self, state, action):
+        x = torch.cat([state, action], axis=-1)
+        z = F.elu(self.l1(x)) 
+        z = F.elu(self.l2(z)) 
+        z_phi = self.l3(z)
+        z_phi = F.normalize(z_phi, p=2, dim=-1)
+        return z_phi
+
+class Mu(nn.Module):
+    """
+    mu': s' -> z_mu in R^d
+    """
+    def __init__(
+        self, 
+        state_dim,
+        feature_dim=1024,
+        hidden_dim=1024,
+        ):
+
+        super(Mu, self).__init__()
+
+        self.l1 = nn.Linear(state_dim , hidden_dim)
+        self.l2 = nn.Linear(hidden_dim, hidden_dim)
+        self.l3 = nn.Linear(hidden_dim, feature_dim)
+
+    def forward(self, state):
+        z = F.elu(self.l1(state))
+        z = F.elu(self.l2(z))
+        # bounded mu's output
+        z_mu = F.tanh(self.l3(z)) 
+        z_mu = F.normalize(z_mu, p=2, dim=-1)
+        # z_mu = self.l3(z)
+        return z_mu
+     
+class Theta(nn.Module):
+    """
+    Linear theta 
+    <phi(s, a), theta> = r 
+    """
+    def __init__(
+        self, 
+        feature_dim=1024,
+        ):
+
+        super(Theta, self).__init__()
+
+        self.l = nn.Linear(feature_dim, 1)
+
+    def forward(self, feature):
+        r = self.l(feature)
+        return r
+     
+class ContrastRepr(nn.Module):
+    def __init__(self, env,  feature_dim: int = 256, hidden_dim: int  = 256):
+        super().__init__()
+        s_size = np.array(env.single_observation_space.shape).prod()
+        a_size = np.array(env.single_action_space.shape).prod()
+
+        self.phi = Phi(s_size, a_size, feature_dim, hidden_dim)
+        self.mu = Mu(s_size, feature_dim)
+
+        self.theta = Theta(feature_dim) # for reward predictions
+
+    def forward(self, state, action = None, next_state=False):
+        if next_state:
+            return self.mu(state), None
+        else:
+            x = self.phi(state, action)
+            reward_prediction = self.theta(x)
+            return x, reward_prediction
+       
+
 # ALGO LOGIC: initialize agent here:
 class SoftQNetwork(nn.Module):
-    def __init__(self, env):
+    def __init__(self, embedder, feature_dim = 256):
         super().__init__()
-        self.fc1 = nn.Linear(np.array(env.single_observation_space.shape).prod() + np.prod(env.single_action_space.shape), 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, 1)
+        self.embedder = embedder
+        self.linear = nn.Linear(feature_dim, 1)
 
-    def forward(self, x, a):
-        x = torch.cat([x, a], 1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
+    def forward(self, s, a):
+        x, _ = self.embedder(s, a)
+        x = self.linear(x)
         return x
 
 
@@ -172,7 +273,16 @@ class Actor(nn.Module):
         return action, log_prob, mean
 
 
-
+def ridge_eval(model, x, y, frac=0.9):
+        bsz = x.shape[0]
+        train_size = int(bsz * frac)
+        train_x = x[:train_size]
+        test_x = x[train_size:]
+        train_y = y[:train_size]
+        test_y = y[train_size:]
+        model.fit(train_x, train_y)
+        pred_y = model.predict(test_x)
+        return mean_squared_error(test_y, pred_y)
 
 
 if __name__ == "__main__":
@@ -218,16 +328,24 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     max_action = float(envs.single_action_space.high[0])
-
     actor = Actor(envs).to(device)
-    qf1 = SoftQNetwork(envs).to(device)
-    qf2 = SoftQNetwork(envs).to(device)
-    qf1_target = SoftQNetwork(envs).to(device)
-    qf2_target = SoftQNetwork(envs).to(device)
+    feature_dim = args.feature_dim
+    embedder = ContrastRepr(envs, feature_dim, args.hidden_dim).to(device)
+    qf1 = SoftQNetwork(embedder, feature_dim).to(device)
+    qf2 = SoftQNetwork(embedder, feature_dim).to(device)
+    qf1_target = SoftQNetwork(embedder, feature_dim).to(device)
+    qf2_target = SoftQNetwork(embedder, feature_dim).to(device)
     qf1_target.load_state_dict(qf1.state_dict())
     qf2_target.load_state_dict(qf2.state_dict())
     q_optimizer = optim.Adam(list(qf1.parameters()) + list(qf2.parameters()), lr=args.q_lr)
     actor_optimizer = optim.Adam(list(actor.parameters()), lr=args.policy_lr)
+    feature_optimizer = torch.optim.Adam(
+            list(embedder.parameters()),
+            lr=args.feat_lr)
+
+    contrastive_loss = SpectralConLoss()
+    ridge_repr = Ridge(alpha=1e-6)
+    ridge_raw = Ridge(alpha=1e-6)
 
 
     # Automatic entropy tuning
@@ -290,6 +408,20 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
+
+            #perform contrastive learning here
+            for _ in range(args.extra_feature_steps+1):
+                data = rb.sample_contrastive(args.cont_batch_size)
+                obs_repr, r_pred = embedder(data.observations, data.actions)
+                next_obs_repr, _ = embedder(data.next_observations, next_state = True)
+                
+                cont_loss = contrastive_loss(obs_repr, next_obs_repr)
+                r_prediction_loss = F.mse_loss(r_pred, data.rewards)
+                feature_loss = cont_loss  + r_prediction_loss*int(args.reward_prediction_loss)
+                feature_optimizer.zero_grad()
+                feature_loss.backward()
+                feature_optimizer.step()
+                
             data = rb.sample(args.batch_size)
             with torch.no_grad():
                 next_state_actions, next_state_log_pi, _ = actor.get_action(data.next_observations)
@@ -298,11 +430,13 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - alpha * next_state_log_pi
                 next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
 
+
             qf1_a_values = qf1(data.observations, data.actions).view(-1)
             qf2_a_values = qf2(data.observations, data.actions).view(-1)
             qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
             qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
-            qf_loss = qf1_loss + qf2_loss
+
+            qf_loss = qf1_loss + qf2_loss 
 
             # optimize the model
             q_optimizer.zero_grad()
@@ -318,7 +452,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                     qf2_pi = qf2(data.observations, pi)
                     min_qf_pi = torch.min(qf1_pi, qf2_pi)
                     actor_loss = ((alpha * log_pi) - min_qf_pi).mean()
-
+                    
                     actor_optimizer.zero_grad()
                     actor_loss.backward()
                     actor_optimizer.step()
@@ -341,6 +475,9 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                     target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
             
 
+
+
+
             if global_step % 100 == 0:
                 writer.add_scalar("losses/qf1_values", qf1_a_values.mean().item(), global_step)
                 writer.add_scalar("losses/qf2_values", qf2_a_values.mean().item(), global_step)
@@ -348,6 +485,9 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 writer.add_scalar("losses/qf2_loss", qf2_loss.item(), global_step)
                 writer.add_scalar("losses/qf_loss", qf_loss.item() / 2.0, global_step)
                 writer.add_scalar("losses/actor_loss", actor_loss.item(), global_step)
+                writer.add_scalar("losses/cont_error", cont_loss.item(), global_step)
+                writer.add_scalar("losses/r_pred_error", r_prediction_loss.item(), global_step)
+                writer.add_scalar("losses/feature_loss", feature_loss.item(), global_step)
                 writer.add_scalar("losses/alpha", alpha, global_step)
                 print("SPS:", int(global_step / (time.time() - start_time)))
                 writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
@@ -355,11 +495,14 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                     writer.add_scalar("losses/alpha_loss", alpha_loss.item(), global_step)
                 
 
-               
+                r_np = data.rewards.cpu().numpy()
+                sa_raw = torch.cat([data.observations, data.actions], dim=-1).cpu().numpy()
+            # print(sa_np.shape, r_np.shape, sa_raw.shape)
+                # writer.add_scalar("losses/baseline_reward", ridge_eval(ridge_raw, sa_raw, r_np), global_step)
                 
 
                 # with torch.no_grad():
-                #     sa_np = repr_net(data.observations, data.actions).cpu().numpy()
+                #     sa_np = embedder(data.observations, data.actions).cpu().numpy()
                 # r_np = data.rewards.cpu().numpy()
                 # sa_raw = torch.cat([data.observations, data.actions], dim=-1).cpu().numpy()
                 # print(ridge_eval(ridge_repr, sa_np, r_np), ridge_eval(ridge_raw, sa_raw, r_np))

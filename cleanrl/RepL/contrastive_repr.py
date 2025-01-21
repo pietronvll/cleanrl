@@ -44,19 +44,21 @@ class SupConLoss(nn.Module):
         self.contrast_mode = contrast_mode
         self.base_temperature = base_temperature
 
-    def forward(self, features, labels=None, mask=None):
+    def forward(self, data, next_data, labels=None, mask=None):
         """Compute loss for model. If both `labels` and `mask` are None,
         it degenerates to SimCLR unsupervised loss:
         https://arxiv.org/pdf/2002.05709.pdf
 
         Args:
-            features: hidden vector of shape [bsz, n_views, ...].
+            data: hidden vector of shape [bsz, n_views, ...].
+            next_data: hidden vector of shape [bsz, n_views, ...].
             labels: ground truth of shape [bsz].
             mask: contrastive mask of shape [bsz, bsz], mask_{i,j}=1 if sample j
                 has the same class as sample i. Can be asymmetric.
         Returns:
             A loss scalar.
         """
+        features = torch.stack([data, next_data], dim=1)
         device = torch.device("cuda") if features.is_cuda else torch.device("cpu")
 
         if len(features.shape) < 3:
@@ -130,3 +132,19 @@ class SupConLoss(nn.Module):
         loss = loss.view(anchor_count, batch_size).mean()
 
         return loss
+
+class NoiseConLoss(nn.Module):
+    """Making Linear MDPs Practical via Contrastive Representation Learning: https://https://arxiv.org/pdf/2207.07150.
+    """
+    def __init__(self, device):
+        super(NoiseConLoss, self).__init__()
+        self.device = device
+
+    def forward(self, data: torch.Tensor, next_data: torch.Tensor):
+        labels = torch.eye(data.shape[0]).to(self.device)
+
+        # we take NCE gamma = 1 here, the paper uses 0.2
+        contrastive = (data[:, None, :] * next_data[None, :, :]).sum(-1) 
+        model_loss = nn.CrossEntropyLoss()
+        model_loss = model_loss(contrastive, labels)
+        return model_loss

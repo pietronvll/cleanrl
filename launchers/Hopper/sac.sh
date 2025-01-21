@@ -11,4 +11,4 @@ cd $PBS_O_WORKDIR
 source ~/.bashrc
 conda activate cleanrl
 
-python cleanrl/sac_continuous_action_multi_env.py 
+python cleanrl/sac_continuous_action_multi_env.py --track

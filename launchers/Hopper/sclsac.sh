@@ -5,10 +5,10 @@
 
 cd $PBS_O_WORKDIR
 
-# Use an optional experiment argument passed via qsub -v EXPERIMENT=...
-SEED=${SEED:-1}
+# # Use an optional experiment argument passed via qsub -v EXPERIMENT=...
+# SEED=${SEED:-1}
 # Load environment
 source ~/.bashrc
 conda activate cleanrl
 
-python cleanrl/RepL/cl_sac_continuous_action.py 
+python cleanrl/RepL/scl_sac_continuous_action.py 

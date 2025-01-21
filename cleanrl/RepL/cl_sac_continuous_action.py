@@ -15,7 +15,7 @@ from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.type_aliases import ReplayBufferSamples
 from torch.utils.tensorboard import SummaryWriter
 
-from powr.contrastive_repr import SupConLoss
+from contrastive_repr import SupConLoss
 
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_squared_error
@@ -63,7 +63,7 @@ class Args:
     """the learning rate of the policy network optimizer"""
     q_lr: float = 3e-4
     """the learning rate of the Q network network optimizer"""
-    feat_lr: float = 3e-4
+    feat_lr: float = 1e-4
     """the learning rate of the contrastive learning network optimizer"""
     policy_frequency: int = 2
     """the frequency of training policy (delayed)"""
@@ -79,11 +79,11 @@ class Args:
     """the hidden dimension of the neural networks"""
     freeze_feature: bool = False
     """whether to freeze the feature parameters"""
-    reward_prediction_loss: bool = False
+    reward_prediction_loss: bool = True
     """whether to use reward prediction loss"""
-    alpha: float = 0.2
+    alpha: float = 0
     """Entropy regularization coefficient."""
-    autotune: bool = True
+    autotune: bool = False
     """automatic tuning of the entropy coefficient"""
 
 
@@ -127,72 +127,74 @@ class ReprReplayBuffer(ReplayBuffer):
         return ReplayBufferSamples(*tuple(map(self.to_torch, data)))
 
 class Phi(nn.Module):
-	"""
-	phi: s, a -> z_phi in R^d
-	"""
-	def __init__(
-		self, 
-		state_dim,
-		action_dim,
-		feature_dim=1024,
-		hidden_dim=1024,
-		):
+    """
+    phi: s, a -> z_phi in R^d
+    """
+    def __init__(
+        self, 
+        state_dim,
+        action_dim,
+        feature_dim=1024,
+        hidden_dim=1024,
+        ):
 
-		super(Phi, self).__init__()
+        super(Phi, self).__init__()
 
-		self.l1 = nn.Linear(state_dim + action_dim, hidden_dim)
-		self.l2 = nn.Linear(hidden_dim, hidden_dim)
-		self.l3 = nn.Linear(hidden_dim, feature_dim)
+        self.l1 = nn.Linear(state_dim + action_dim, hidden_dim)
+        self.l2 = nn.Linear(hidden_dim, hidden_dim)
+        self.l3 = nn.Linear(hidden_dim, feature_dim)
 
-	def forward(self, state, action):
-		x = torch.cat([state, action], axis=-1)
-		z = F.elu(self.l1(x)) 
-		z = F.elu(self.l2(z)) 
-		z_phi = self.l3(z)
-		return z_phi
+    def forward(self, state, action):
+        x = torch.cat([state, action], axis=-1)
+        z = F.elu(self.l1(x)) 
+        z = F.elu(self.l2(z)) 
+        z_phi = self.l3(z)
+        z_phi = F.normalize(z_phi, p=2, dim=-1)
+        return z_phi
 
 class Mu(nn.Module):
-	"""
-	mu': s' -> z_mu in R^d
-	"""
-	def __init__(
-		self, 
-		state_dim,
-		feature_dim=1024,
-		hidden_dim=1024,
-		):
+    """
+    mu': s' -> z_mu in R^d
+    """
+    def __init__(
+        self, 
+        state_dim,
+        feature_dim=1024,
+        hidden_dim=1024,
+        ):
 
-		super(Mu, self).__init__()
+        super(Mu, self).__init__()
 
-		self.l1 = nn.Linear(state_dim , hidden_dim)
-		self.l2 = nn.Linear(hidden_dim, hidden_dim)
-		self.l3 = nn.Linear(hidden_dim, feature_dim)
+        self.l1 = nn.Linear(state_dim , hidden_dim)
+        self.l2 = nn.Linear(hidden_dim, hidden_dim)
+        self.l3 = nn.Linear(hidden_dim, feature_dim)
 
-	def forward(self, state):
-		z = F.elu(self.l1(state))
-		z = F.elu(self.l2(z)) 
-		# bounded mu's output
-		z_mu = F.tanh(self.l3(z)) 
-		# z_mu = self.l3(z)
-		return z_mu
+    def forward(self, state):
+        z = F.elu(self.l1(state))
+        z = F.elu(self.l2(z))
+        # bounded mu's output
+        z_mu = F.tanh(self.l3(z)) 
+        z_mu = F.normalize(z_mu, p=2, dim=-1)
+        # z_mu = self.l3(z)
+        return z_mu
      
 class Theta(nn.Module):
-	"""
-	Linear theta 
-	<phi(s, a), theta> = r 
-	"""
-	def __init__(
-		self, 
-		feature_dim=1024,
-		):
+    """
+    Linear theta 
+    <phi(s, a), theta> = r 
+    """
+    def __init__(
+        self, 
+        feature_dim=1024,
+        ):
 
-		super(Theta, self).__init__()
+        super(Theta, self).__init__()
 
-		self.l = nn.Linear(feature_dim, 1)
+        self.l = nn.Linear(feature_dim, 1)
 
-	def forward(self, feature):
-		r = self.l(feature)
-		return r
+    def forward(self, feature):
+        r = self.l(feature)
+        return r
      
 class ContrastRepr(nn.Module):
     def __init__(self, env,  feature_dim: int = 256, hidden_dim: int  = 256):
@@ -203,14 +205,14 @@ class ContrastRepr(nn.Module):
         self.phi = Phi(s_size, a_size, feature_dim, hidden_dim)
         self.mu = Mu(s_size, feature_dim)
 
-        self.reward_theta = Theta(feature_dim)
+        self.theta = Theta(feature_dim) # for reward predictions
 
-    def forward(self, state, action, next_state=False):
+    def forward(self, state, action = None, next_state=False):
         if next_state:
             return self.mu(state), None
         else:
             x = self.phi(state, action)
-            reward_prediction = self.reward_theta(x)
+            reward_prediction = self.theta(x)
             return x, reward_prediction
        
 
@@ -326,8 +328,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     max_action = float(envs.single_action_space.high[0])
+    actor = Actor(envs).to(device)
     feature_dim = args.feature_dim
-    actor = Actor(envs, feature_dim).to(device)
     embedder = ContrastRepr(envs, feature_dim, args.hidden_dim).to(device)
     qf1 = SoftQNetwork(embedder, feature_dim).to(device)
     qf2 = SoftQNetwork(embedder, feature_dim).to(device)
@@ -338,8 +340,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     q_optimizer = optim.Adam(list(qf1.parameters()) + list(qf2.parameters()), lr=args.q_lr)
     actor_optimizer = optim.Adam(list(actor.parameters()), lr=args.policy_lr)
     feature_optimizer = torch.optim.Adam(
-			list(embedder.phi.parameters()) + list(embedder.mu.parameters()) + list(embedder.theta.parameters()),
-			weight_decay=0, lr=args.feat_lr)
+            list(embedder.parameters()),
+            lr=args.feat_lr)
 
     contrastive_loss = SupConLoss(temperature=0.1)
     ridge_repr = Ridge(alpha=1e-6)
@@ -413,6 +415,13 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 obs_repr, r_pred = embedder(data.observations, data.actions)
                 next_obs_repr, _ = embedder(data.next_observations, next_state = True)
                 
+                cont_loss = contrastive_loss(torch.stack([obs_repr, next_obs_repr], dim=1))
+                r_prediction_loss = F.mse_loss(r_pred, data.rewards)
+                feature_loss = cont_loss  + r_prediction_loss*int(args.reward_prediction_loss)
+                feature_optimizer.zero_grad()
+                feature_loss.backward()
+                feature_optimizer.step()
+                
             data = rb.sample(args.batch_size)
             with torch.no_grad():
                 next_state_actions, next_state_log_pi, _ = actor.get_action(data.next_observations)
@@ -421,12 +430,6 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - alpha * next_state_log_pi
                 next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
 
-                cont_loss = contrastive_loss(torch.stack([obs_repr, next_obs_repr], dim=1))
-                r_prediction_loss = F.mse_loss(r_pred, data.rewards)
-                feature_loss = cont_loss + r_prediction_loss*int(args.reward_prediction_loss)
-                feature_optimizer.zero_grad()
-                feature_loss.backward()
-                feature_optimizer.step()
 
             qf1_a_values = qf1(data.observations, data.actions).view(-1)
             qf2_a_values = qf2(data.observations, data.actions).view(-1)
@@ -449,7 +452,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                     qf2_pi = qf2(data.observations, pi)
                     min_qf_pi = torch.min(qf1_pi, qf2_pi)
                     actor_loss = ((alpha * log_pi) - min_qf_pi).mean()
-
+                    
                     actor_optimizer.zero_grad()
                     actor_loss.backward()
                     actor_optimizer.step()

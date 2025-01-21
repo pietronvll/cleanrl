@@ -79,10 +79,10 @@ class Actor(nn.Module):
 
     ...
 
-	def forward(self, state):
-		a = F.relu(self.l1(state))
-		a = F.relu(self.l2(a))
-		return self.max_action * torch.tanh(self.l3(a)) # Scale from [-1,1] to [-action_high, action_high]
+    def forward(self, state):
+        a = F.relu(self.l1(state))
+        a = F.relu(self.l2(a))
+        return self.max_action * torch.tanh(self.l3(a)) # Scale from [-1,1] to [-action_high, action_high]
 ```
  On the other hand, in [`CleanRL's td3_continuous_action.py`](https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/td3_continuous_action.py), the mean and the scale of the action space are computed as `action_bias` and `action_scale` respectively.
  Those scalars are in turn used to scale the output of a `tanh` activation function in the actor to the original action space range:
