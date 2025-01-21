@@ -9,12 +9,12 @@ SEED=${SEED:-1}
 
 # Load environment
 source ~/.bashrc
-mamba activate cleanrl
+conda activate cleanrl
 
 python cleanrl/ppo_continuous_action.py \
-    --exp_name "ppo_big-lr" \
+    --exp_name "ppo" \
     --env-id "HalfCheetah-v4" \
-    --learning-rate 0.003 \
+    --learning-rate 3e-4 \
     --seed $SEED \
     --total-timesteps 1000000 \
     --num-envs 1 \
