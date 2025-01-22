@@ -134,3 +134,6 @@ videos/
 
 #notebooks
 scratch.ipynb
+
+# Franklin log files
+*.o*

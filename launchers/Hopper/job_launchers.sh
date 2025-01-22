@@ -1,7 +1,7 @@
 #!/bin/bash
 
-rep_loss_arr="supervised contrastive nce"
-q_feature_train_arr="false"
+rep_loss_arr="supervised spectral nce"
+q_feature_train_arr="true false"
 learning_starts_arr="1000 25000"
 reward_weight_arr="1.0 0.1"
 

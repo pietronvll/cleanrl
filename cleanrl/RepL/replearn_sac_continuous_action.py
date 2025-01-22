@@ -384,6 +384,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         contrastive_loss = SpectralConLoss()
     elif args.rep_loss == "nce":
         contrastive_loss = NoiseConLoss(device)
+    else:
+        raise ValueError("Unknown representation learning loss: ", args.rep_loss)
     
     ridge_repr = Ridge(alpha=1e-6)
     ridge_raw = Ridge(alpha=1e-6)
