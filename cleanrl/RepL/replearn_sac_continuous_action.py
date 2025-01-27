@@ -1,5 +1,6 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/sac/#sac_continuous_actionpy
 import os
+import copy
 import random
 import time
 from dataclasses import dataclass
@@ -55,6 +56,8 @@ class Args:
     """the discount factor gamma"""
     tau: float = 0.005
     """target smoothing coefficient (default: 0.005)"""
+    feature_tau: float = 0.005
+    """target smoothing coefficient (default: 0.005)"""
     batch_size: int = 256
     """the batch size of sample from the replay memory"""
     cont_batch_size: int = 1024
@@ -71,23 +74,23 @@ class Args:
     """the frequency of training policy (delayed)"""
     target_network_frequency: int = 1  # Denis Yarats' implementation delays this by 2.
     """the frequency of updates for the target nerworks"""
+    critic_layers: int = 1
+    """the number of layers in the Q networks"""
+    critic_hidden_dim: int = 256
+    """the hidden dimension of the critic networks"""
     rep_loss: str = "nce" # "supervised" or "spectral" or "nce"
     """the loss function for the representation learning"""
     extra_feature_steps: int = 3
     """the number of extra feature steps to train Mu and Phi"""
-    q_feature_train: bool = True
-    """whether to train the feature extractor when training the Q networks"""
-    use_feature_target: bool = True
-    """whether to use feature target""" # NOT implemented yet
+    use_feature_target: bool = False
+    """whether to use feature target""" # NOT yet understood
     feature_dim: int = 256
     """the dimension of the feature"""
-    hidden_dim: int = 256  
+    feat_hidden_dim: int = 256  
     """the hidden dimension of the neural networks"""
-    freeze_feature: bool = False
-    """whether to freeze the feature parameters"""
     reward_prediction_loss: bool = True
     """whether to use reward prediction loss"""
-    reward_weight: float = 1.0
+    reward_weight: float = 0.5
     """the weight of the reward prediction loss"""
     alpha: float = 0
     """Entropy regularization coefficient."""
@@ -204,40 +207,50 @@ class Theta(nn.Module):
         r = self.l(feature)
         return r
      
-class ContrastRepr(nn.Module):
-    def __init__(self, env,  feature_dim: int = 256, hidden_dim: int  = 256):
-        super().__init__()
-        s_size = np.array(env.single_observation_space.shape).prod()
-        a_size = np.array(env.single_action_space.shape).prod()
+# class ContrastRepr(nn.Module):
+#     def __init__(self, env,  feature_dim: int = 256, hidden_dim: int  = 256):
+#         super().__init__()
+#         s_size = np.array(env.single_observation_space.shape).prod()
+#         a_size = np.array(env.single_action_space.shape).prod()
 
-        self.phi = Phi(s_size, a_size, feature_dim, hidden_dim)
-        self.mu = Mu(s_size, feature_dim)
+#         self.phi = Phi(s_size, a_size, feature_dim, hidden_dim)
+#         self.mu = Mu(s_size, feature_dim)
 
-        self.theta = Theta(feature_dim) # for reward predictions
+#         self.theta = Theta(feature_dim) # for reward predictions
 
-    def forward(self, state, action = None, next_state=False):
-        if next_state:
-            return self.mu(state), None
-        else:
-            x = self.phi(state, action)
-            reward_prediction = self.theta(x)
-            return x, reward_prediction
+#     def forward(self, state, action = None, next_state=False):
+#         if next_state:
+#             return self.mu(state), None
+#         else:
+#             x = self.phi(state, action)
+#             reward_prediction = self.theta(x)
+#             return x, reward_prediction
        
 
 # ALGO LOGIC: initialize agent here:
 class SoftQNetwork(nn.Module):
-    def __init__(self, embedder, feature_dim = 256):
+    def __init__(self, feature_dim = 256, n_layers=1, hidden_dim=256):
         super().__init__()
-        self.embedder = embedder
-        self.linear = nn.Linear(feature_dim, 1)
+        # self.embedder = embedder
 
-    def forward(self, s, a, embed_grad = True):
-        if embed_grad:
-            x, _ = self.embedder(s, a)
+        # create Q network layers depending on the number of layers and hidden_dim using a loop
+        if n_layers < 1:
+            raise ValueError("n_layers must be greater than 1")
+        elif n_layers == 1:
+            self.critic_layers = nn.ModuleList([nn.Linear(feature_dim, 1)])
         else:
-            with torch.no_grad():
-                x, _ = self.embedder(s, a)
-        x = self.linear(x)
+            self.critic_layers = nn.ModuleList()
+            self.critic_layers.append(nn.Linear(feature_dim, hidden_dim))
+            for _ in range(n_layers - 2):
+                self.critic_layers.append(nn.ReLU())   
+                self.critic_layers.append(nn.Linear(hidden_dim, hidden_dim)) 
+            self.critic_layers.append(nn.ReLU())
+            self.critic_layers.append(nn.Linear(hidden_dim, 1))  
+
+    def forward(self, z):
+        x = z
+        for layer in self.critic_layers:
+            x = layer(x)
         return x
 
 
@@ -305,14 +318,14 @@ def get_run_name(args, current_date=None):
         + str(args.env_id)
         + "_"
         + str(args.rep_loss) + "_sac_continuous_action"
+        + "_clayers="
+        + str(args.critic_layers)
         + "_rp_loss="
         + str(args.reward_prediction_loss)
         + "_fdim="
         + str(args.feature_dim)
         + "_rw="
         + str(args.reward_weight)
-        + "_qftrain="
-        + str(args.q_feature_train)
         + "_seed"
         + str(args.seed)
         + "_"
@@ -365,17 +378,31 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     max_action = float(envs.single_action_space.high[0])
     actor = Actor(envs).to(device)
     feature_dim = args.feature_dim
-    embedder = ContrastRepr(envs, feature_dim, args.hidden_dim).to(device)
-    qf1 = SoftQNetwork(embedder, feature_dim).to(device)
-    qf2 = SoftQNetwork(embedder, feature_dim).to(device)
-    qf1_target = SoftQNetwork(embedder, feature_dim).to(device)
-    qf2_target = SoftQNetwork(embedder, feature_dim).to(device)
+    state_dim = np.array(envs.single_observation_space.shape).prod()
+    action_dim = np.array(envs.single_action_space.shape).prod()
+    # Representation learning Nets
+    # phi(s, a) -> z_phi
+    phi= Phi(state_dim, action_dim, feature_dim, args.feat_hidden_dim).to(device)
+    frozen_phi = copy.deepcopy(phi)
+    if args.use_feature_target:
+        phi_target = copy.deepcopy(phi)
+        frozen_phi_target = copy.deepcopy(phi)
+    # mu(s') -> z_mu
+    mu = Mu(state_dim, feature_dim, args.feat_hidden_dim).to(device)
+
+    #<phi(s, a), theta> = r 
+    theta = Theta(feature_dim).to(device)
+
+    qf1 = SoftQNetwork( feature_dim, args.critic_layers, args.critic_hidden_dim).to(device)
+    qf2 = SoftQNetwork( feature_dim, args.critic_layers, args.critic_hidden_dim).to(device)
+    qf1_target = SoftQNetwork( feature_dim, args.critic_layers, args.critic_hidden_dim).to(device)
+    qf2_target = SoftQNetwork( feature_dim, args.critic_layers, args.critic_hidden_dim).to(device)
     qf1_target.load_state_dict(qf1.state_dict())
     qf2_target.load_state_dict(qf2.state_dict())
     q_optimizer = optim.Adam(list(qf1.parameters()) + list(qf2.parameters()), lr=args.q_lr)
     actor_optimizer = optim.Adam(list(actor.parameters()), lr=args.policy_lr)
     feature_optimizer = torch.optim.Adam(
-            list(embedder.parameters()),
+            list(phi.parameters()) + list(mu.parameters()) + list(theta.parameters()),
             lr=args.feat_lr)
 
     if args.rep_loss == "supervised":
@@ -455,27 +482,44 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             #perform contrastive learning here
             for _ in range(args.extra_feature_steps+1):
                 data = rb.sample_contrastive(args.cont_batch_size)
-                obs_repr, r_pred = embedder(data.observations, data.actions)
-                next_obs_repr, _ = embedder(data.next_observations, next_state = True)
-                
-                cont_loss = contrastive_loss(obs_repr, next_obs_repr)
-                r_prediction_loss = F.mse_loss(r_pred, data.rewards)
+                z_phi = phi(data.observations, data.actions)
+                z_mu_next = mu(data.next_observations)
+                r_pred= theta(z_phi)
+
+                cont_loss = contrastive_loss(z_phi, z_mu_next)
+                r_prediction_loss = F.mse_loss(r_pred, data.rewards).mean()
                 feature_loss = cont_loss  + args.reward_weight*r_prediction_loss*int(args.reward_prediction_loss)
                 feature_optimizer.zero_grad()
                 feature_loss.backward()
                 feature_optimizer.step()
                 
+                # Update the feature network if needed
+                if args.use_feature_target:
+                    for param, target_param in zip(phi.parameters(), phi_target.parameters()):
+                        target_param.data.copy_(args.feature_tau * param.data + (1 - args.feature_tau) * target_param.data)
+  
+            # copy phi to frozen phi
+            frozen_phi.load_state_dict(phi.state_dict().copy())
+            if args.use_feature_target:
+                frozen_phi_target.load_state_dict(phi.state_dict().copy())
+
             data = rb.sample(args.batch_size)
             with torch.no_grad():
                 next_state_actions, next_state_log_pi, _ = actor.get_action(data.next_observations)
-                qf1_next_target = qf1_target(data.next_observations, next_state_actions)
-                qf2_next_target = qf2_target(data.next_observations, next_state_actions)
+                if args.use_feature_target:
+                    z_phi = frozen_phi_target(data.observations, data.actions)
+                    z_phi_next = frozen_phi_target(data.next_observations, next_state_actions)
+                else:
+                    z_phi = frozen_phi(data.observations, data.actions)
+                    z_phi_next = frozen_phi(data.next_observations, next_state_actions)
+
+                qf1_next_target = qf1_target(z_phi_next)
+                qf2_next_target = qf2_target(z_phi_next)
                 min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - alpha * next_state_log_pi
                 next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
 
-
-            qf1_a_values = qf1(data.observations, data.actions, embed_grad = args.q_feature_train).view(-1)
-            qf2_a_values = qf2(data.observations, data.actions, embed_grad = args.q_feature_train).view(-1)
+            qf1_a_values = qf1(z_phi_next).view(-1)
+            qf2_a_values = qf2(z_phi_next).view(-1)
             qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
             qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
 
@@ -491,8 +535,9 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                     args.policy_frequency
                 ):  # compensate for the delay by doing 'actor_update_interval' instead of 1
                     pi, log_pi, _ = actor.get_action(data.observations)
-                    qf1_pi = qf1(data.observations, pi)
-                    qf2_pi = qf2(data.observations, pi)
+                    z_phi = frozen_phi(data.observations, pi)
+                    qf1_pi = qf1(z_phi)
+                    qf2_pi = qf2(z_phi)
                     min_qf_pi = torch.min(qf1_pi, qf2_pi)
                     actor_loss = ((alpha * log_pi) - min_qf_pi).mean()
                     
@@ -517,8 +562,6 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 for param, target_param in zip(qf2.parameters(), qf2_target.parameters()):
                     target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
             
-
-
 
 
             if global_step % 100 == 0:
