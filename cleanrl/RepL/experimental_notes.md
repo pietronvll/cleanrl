@@ -33,3 +33,45 @@
 * What are the results of the original NCE code?
 * Is hopper too complicated, what are the performance on other simpler envs?
 * What about PPO?
+
+**Setting 2**
+* env = __HalfCeetah-v4__
+* Same as before
+
+**Experiments**
+* General CL
+    * Here, the results are nuch worse. There is not a raising up curve. The rew is between -500 and 0 (vanilla sac reches 10k). This makes me think that 1000 rew in Hopper is a very low rew and I should save some gifs
+    * Training features with critic learning makes the contrastive loss going up (instead of going down), together with q_loss
+    * If we freeze embedding training during critic learning we have feat loss going down and q_loss with a triangular shap (going up at first (peak of 32) and then going down (until 25)). 
+        * This result is the opposite of what we saw in hopper
+        * In (1), they freeze the embeddings training during q and policy training, while here we train that always during policy and we chose whether or not to train that during q learning. Let's try their approach
+
+### 27/01/2025 - \<Exps 2\>
+
+**Setting**
+
+* env = __Hopper-v4__
+* Major Changes:
+    * BEFORE: train embeddings always during policy and chose to train or not during q learning-> NOW: freeze the embeddings training during q and policy training
+    * BEFORE: always 1 critic layer -> NOW: we chan choose the number of critic layers (our goal is to have just one)
+    * **THERE WAS A MAJOR BUG**
+    * doing it again...
+
+
+### 27/01/2025 - \<Exps 3\>
+
+**Setting**
+
+* env = __Hopper-v4__
+* Major Changes:
+    * BEFORE:  freeze the embeddings training during q and policy training -> NOW: allow embedding training during policy training
+    * **THERE WAS A MAJOR BUG**
+
+
+### 24/01/2025 - \<Exps n\>
+
+**Setting**
+
+* env = __Hopper-v4__/__HalfCeetah-v4__
+* Major Changes:
+    * BEFORE:  allow embedding training during policy training -> NOW: NOT allow embedding training during policy training just during Q learning

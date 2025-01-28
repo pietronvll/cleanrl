@@ -24,7 +24,7 @@ source ~/.bashrc
 conda activate cleanrl
 
 python cleanrl/RepL/replearn_sac_continuous_action.py \
-  --env_id "Hopper-v4" \
+  --env_id "HalfCeetah-v4" \
   --rep-loss "$REP_LOSS" \
   --critic-layers $CRITIC_LAYERS \
   --learning-starts $LEARNING_STARTS \

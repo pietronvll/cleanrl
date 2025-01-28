@@ -5,13 +5,14 @@
 
 cd $PBS_O_WORKDIR
 
-SEED=${SEED:-1}
+# SEED=${SEED:-1}
 
 # Load environment
 source ~/.bashrc
-mamba activate cleanrl
+conda activate cleanrl
 
 python cleanrl/sac_continuous_action.py \
     --exp_name "sac" \
     --env-id "HalfCheetah-v4" \
-    --seed $SEED \
+    --track \
+    # --seed $SEED \

@@ -88,6 +88,8 @@ class Args:
     """the dimension of the feature"""
     feat_hidden_dim: int = 256  
     """the hidden dimension of the neural networks"""
+    freeze_feature: bool = True
+    """whether to freeze the feature learning during the training of the policy"""
     reward_prediction_loss: bool = True
     """whether to use reward prediction loss"""
     reward_weight: float = 0.5
@@ -518,8 +520,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - alpha * next_state_log_pi
                 next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
 
-            qf1_a_values = qf1(z_phi_next).view(-1)
-            qf2_a_values = qf2(z_phi_next).view(-1)
+            qf1_a_values = qf1(z_phi).view(-1)
+            qf2_a_values = qf2(z_phi).view(-1)
             qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
             qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
 
@@ -535,7 +537,10 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                     args.policy_frequency
                 ):  # compensate for the delay by doing 'actor_update_interval' instead of 1
                     pi, log_pi, _ = actor.get_action(data.observations)
-                    z_phi = frozen_phi(data.observations, pi)
+                    if args.freeze_feature:
+                        z_phi = frozen_phi(data.observations, pi)
+                    else:
+                        z_phi = phi(data.observations, pi)
                     qf1_pi = qf1(z_phi)
                     qf2_pi = qf2(z_phi)
                     min_qf_pi = torch.min(qf1_pi, qf2_pi)
