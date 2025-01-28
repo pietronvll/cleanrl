@@ -208,25 +208,6 @@ class Theta(nn.Module):
     def forward(self, feature):
         r = self.l(feature)
         return r
-     
-# class ContrastRepr(nn.Module):
-#     def __init__(self, env,  feature_dim: int = 256, hidden_dim: int  = 256):
-#         super().__init__()
-#         s_size = np.array(env.single_observation_space.shape).prod()
-#         a_size = np.array(env.single_action_space.shape).prod()
-
-#         self.phi = Phi(s_size, a_size, feature_dim, hidden_dim)
-#         self.mu = Mu(s_size, feature_dim)
-
-#         self.theta = Theta(feature_dim) # for reward predictions
-
-#     def forward(self, state, action = None, next_state=False):
-#         if next_state:
-#             return self.mu(state), None
-#         else:
-#             x = self.phi(state, action)
-#             reward_prediction = self.theta(x)
-#             return x, reward_prediction
        
 
 # ALGO LOGIC: initialize agent here:
@@ -395,8 +376,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     #<phi(s, a), theta> = r 
     theta = Theta(feature_dim).to(device)
 
-    qf1 = SoftQNetwork( feature_dim, args.critic_layers, args.critic_hidden_dim).to(device)
-    qf2 = SoftQNetwork( feature_dim, args.critic_layers, args.critic_hidden_dim).to(device)
+    qf1 = SoftQNetwork(feature_dim, args.critic_layers, args.critic_hidden_dim).to(device)
+    qf2 = SoftQNetwork(feature_dim, args.critic_layers, args.critic_hidden_dim).to(device)
     qf1_target = SoftQNetwork( feature_dim, args.critic_layers, args.critic_hidden_dim).to(device)
     qf2_target = SoftQNetwork( feature_dim, args.critic_layers, args.critic_hidden_dim).to(device)
     qf1_target.load_state_dict(qf1.state_dict())
@@ -481,13 +462,14 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
 
-            #perform contrastive learning here
+            # Perform Contrastive Learning here
             for _ in range(args.extra_feature_steps+1):
                 data = rb.sample_contrastive(args.cont_batch_size)
                 z_phi = phi(data.observations, data.actions)
                 z_mu_next = mu(data.next_observations)
                 r_pred= theta(z_phi)
 
+                # contrastive loss
                 cont_loss = contrastive_loss(z_phi, z_mu_next)
                 r_prediction_loss = F.mse_loss(r_pred, data.rewards).mean()
                 feature_loss = cont_loss  + args.reward_weight*r_prediction_loss*int(args.reward_prediction_loss)

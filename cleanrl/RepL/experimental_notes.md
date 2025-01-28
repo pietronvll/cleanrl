@@ -46,6 +46,8 @@
         * This result is the opposite of what we saw in hopper
         * In (1), they freeze the embeddings training during q and policy training, while here we train that always during policy and we chose whether or not to train that during q learning. Let's try their approach
 
+* _Wandb **group by**_: env_id, rep_loss, q_feature_train, reward_weight
+
 ### 27/01/2025 - \<Exps 2\>
 
 **Setting**

@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 import gym
+import socket
+from datetime import datetime
 import argparse
 import os
 
@@ -17,12 +19,27 @@ from agent.spedersac import spedersac_agent
 
 EPS_GREEDY = 0.01
 
+def get_run_name(args, current_date=None):
+    if current_date is None:
+        current_date = datetime.today().strftime("%Y_%m_%d_%H_%M_%S")
+    return (
+        str(current_date)
+        + "_"
+        + str(args.env_id)
+        + "_"
+        + str(args.alg) + "_NCE"
+        + "_seed"
+        + str(args.seed)
+        + "_"
+        + socket.gethostname()
+    )
+
 if __name__ == "__main__":
 
   parser = argparse.ArgumentParser()
   parser.add_argument("--dir", default=0, type=int)                     
-  parser.add_argument("--alg", default="diffsrsac")                     # Alg name (sac, vlsac, spedersac, ctrlsac, mulvdrq, diffsrsac, spedersac)
-  parser.add_argument("--env", default="HalfCheetah-v3")          # Environment name
+  parser.add_argument("--alg", default="ctrlsac")                     # Alg name (sac, vlsac, spedersac, ctrlsac, mulvdrq, diffsrsac, spedersac)
+  parser.add_argument("--env_id", default="Hopper-v3")          # Environment name
   parser.add_argument("--seed", default=0, type=int)              # Sets Gym, PyTorch and Numpy seeds
   parser.add_argument("--start_timesteps", default=25e3, type=float)# Time steps initial random policy is used
   parser.add_argument("--eval_freq", default=5e3, type=int)       # How often (time steps) we evaluate
@@ -35,6 +52,9 @@ if __name__ == "__main__":
   parser.add_argument("--tau", default=0.005)                     # Target network update rate
   parser.add_argument("--learn_bonus", action="store_true")        # Save model and optimizer parameters
   parser.add_argument("--save_model", action="store_true")        # Save model and optimizer parameters
+  parser.add_argument("--track", default=True)       
+  parser.add_argument("--wandb_entity", default=None)        
+  parser.add_argument("--wandb_project_name", default="cleanrl")        
   parser.add_argument("--extra_feature_steps", default=3, type=int)
   args = parser.parse_args()
 
@@ -42,21 +62,34 @@ if __name__ == "__main__":
     import sys
     sys.path.append('agent/mulvdrq/')
     from agent.mulvdrq.train_metaworld import Workspace, cfg
-    cfg.task_name = args.env
+    cfg.task_name = args.env_id
     cfg.seed = args.seed
     workspace = Workspace(cfg)
     workspace.train()
 
     sys.exit()
 
-  env = gym.make(args.env)
-  eval_env = gym.make(args.env)
+  env = gym.make(args.env_id)
+  eval_env = gym.make(args.env_id)
   env.seed(args.seed)
   eval_env.seed(args.seed)
   max_length = env._max_episode_steps
 
+  run_name = get_run_name(args) 
   # setup log 
-  log_path = f'log/{args.env}/{args.alg}/{args.dir}/{args.seed}'
+  if args.track:
+      import wandb
+
+      wandb.init(
+          project=args.wandb_project_name,
+          entity=args.wandb_entity,
+          sync_tensorboard=True,
+          config=vars(args),
+          name=run_name,
+          monitor_gym=True,
+          save_code=True,
+      )
+  log_path = f'log/{args.env_id}/{run_name}'
   summary_writer = SummaryWriter(log_path)
 
   # set seeds
@@ -89,6 +122,7 @@ if __name__ == "__main__":
     # hardcoded for now
     kwargs['feature_dim'] = 2048  
     kwargs['hidden_dim'] = 1024
+    kwargs['alpha'] = 0 #Entropy set to zero by @mp
     agent = ctrlsac_agent.CTRLSACAgent(**kwargs)
   elif args.alg == 'diffsrsac':
     agent = diffsrsac_agent.DIFFSRSACAgent(**kwargs)
@@ -146,6 +180,9 @@ if __name__ == "__main__":
     if done: 
       # +1 to account for 0 indexing. +0 on ep_timesteps since it will increment +1 even if done=True
       print(f"Total T: {t+1} Episode Num: {episode_num+1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f}")
+      summary_writer.add_scalar(f'charts/episodic_return', episode_reward , t+1)
+      summary_writer.add_scalar(f'charts/episodic_lenght', episode_timesteps , t+1)
+      summary_writer.add_scalar(f'charts/global_step',t+1 , t+1)
       # Reset environment
       state, done = env.reset(), False
       episode_reward = 0
