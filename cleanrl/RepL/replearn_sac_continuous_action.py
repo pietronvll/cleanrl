@@ -60,7 +60,7 @@ class Args:
     """target smoothing coefficient (default: 0.005)"""
     batch_size: int = 256
     """the batch size of sample from the replay memory"""
-    cont_batch_size: int = 1024
+    cont_batch_size: int = 2048
     """the batch size of sample from the replay memory"""
     learning_starts: int = int(1000) #int(1e4)
     """timestep to start learning"""
@@ -84,12 +84,14 @@ class Args:
     """the number of extra feature steps to train Mu and Phi"""
     use_feature_target: bool = False
     """whether to use feature target""" # NOT yet understood
-    feature_dim: int = 256
+    feature_dim: int = 2048
     """the dimension of the feature"""
-    feat_hidden_dim: int = 256  
+    feat_hidden_dim: int = 2048  
     """the hidden dimension of the neural networks"""
-    freeze_feature: bool = True
-    """whether to freeze the feature learning during the training of the policy"""
+    cirtic_feat_training: bool = True
+    """whether to learn features during critic training"""
+    policy_feat_training: bool = True
+    """whether to learn features during policy training"""
     reward_prediction_loss: bool = True
     """whether to use reward prediction loss"""
     reward_weight: float = 0.5
@@ -502,6 +504,12 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - alpha * next_state_log_pi
                 next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
 
+            if args.cirtic_feat_training:
+                # Trained phi during q-learning
+                if args.use_feature_target:
+                    z_phi = phi_target(data.observations, data.actions)
+                else:
+                    z_phi = phi(data.observations, data.actions)
             qf1_a_values = qf1(z_phi).view(-1)
             qf2_a_values = qf2(z_phi).view(-1)
             qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
@@ -511,26 +519,36 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
             # optimize the model
             q_optimizer.zero_grad()
+            if args.cirtic_feat_training:
+                feature_optimizer.zero_grad()
             qf_loss.backward()
             q_optimizer.step()
+            if args.cirtic_feat_training:
+                feature_optimizer.step()
+
 
             if global_step % args.policy_frequency == 0:  # TD 3 Delayed update support
                 for _ in range(
                     args.policy_frequency
                 ):  # compensate for the delay by doing 'actor_update_interval' instead of 1
                     pi, log_pi, _ = actor.get_action(data.observations)
-                    if args.freeze_feature:
-                        z_phi = frozen_phi(data.observations, pi)
-                    else:
+                    if args.policy_feat_training:
                         z_phi = phi(data.observations, pi)
+                    else:
+                        z_phi = frozen_phi(data.observations, pi)
+
                     qf1_pi = qf1(z_phi)
                     qf2_pi = qf2(z_phi)
                     min_qf_pi = torch.min(qf1_pi, qf2_pi)
                     actor_loss = ((alpha * log_pi) - min_qf_pi).mean()
                     
                     actor_optimizer.zero_grad()
+                    if args.cirtic_feat_training:
+                        feature_optimizer.zero_grad()
                     actor_loss.backward()
                     actor_optimizer.step()
+                    if args.cirtic_feat_training:
+                        feature_optimizer.step()
 
                     if args.autotune:
                         with torch.no_grad():

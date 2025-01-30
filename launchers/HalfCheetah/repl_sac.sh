@@ -13,11 +13,11 @@ REWARD_WEIGHT=${REWARD_WEIGHT:-1.0}
 CRITIC_LAYERS=${CRITIC_LAYERS:-1}
 # SEED=${SEED:0}
 
-# if [ "$Q_FEATURE_TRAIN" == "true" ]; then
-#   q_feature_arg="--q-feature-train"
-# else
-#   q_feature_arg="--no-q-feature-train"
-# fi
+if [ "$CRITIC_TRAINING" == "True" ]; then
+  critic_training_arg="--cirtic_feat_training"
+else
+  critic_training_arg="--no-cirtic_feat_training"
+fi
 
 # Load environment
 source ~/.bashrc
@@ -29,4 +29,5 @@ python cleanrl/RepL/replearn_sac_continuous_action.py \
   --critic-layers $CRITIC_LAYERS \
   --learning-starts $LEARNING_STARTS \
   --reward-weight $REWARD_WEIGHT \
+  $critic_training_arg \
   --track

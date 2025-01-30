@@ -46,8 +46,8 @@ if __name__ == "__main__":
   parser.add_argument("--max_timesteps", default=1e6, type=float)   # Max time steps to run environment
   parser.add_argument("--expl_noise", default=0.1)                # Std of Gaussian exploration noise
   parser.add_argument("--batch_size", default=256, type=int)      # Batch size for both actor and critic
-  parser.add_argument("--hidden_dim", default=256, type=int)      # Network hidden dims
-  parser.add_argument("--feature_dim", default=256, type=int)      # Latent feature dim
+  parser.add_argument("--hidden_dim", default=1024, type=int)      # Network hidden dims
+  parser.add_argument("--feature_dim", default=2048, type=int)      # Latent feature dim
   parser.add_argument("--discount", default=0.99)                 # Discount factor
   parser.add_argument("--tau", default=0.005)                     # Target network update rate
   parser.add_argument("--learn_bonus", action="store_true")        # Save model and optimizer parameters
@@ -56,6 +56,7 @@ if __name__ == "__main__":
   parser.add_argument("--wandb_entity", default=None)        
   parser.add_argument("--wandb_project_name", default="cleanrl")        
   parser.add_argument("--extra_feature_steps", default=3, type=int)
+  parser.add_argument("--rep_loss", default="NCE_orig", type=str) # Just for WandB tracking, DO NOT CHANGE!!
   args = parser.parse_args()
 
   if args.alg == 'mulvdrq':
@@ -122,7 +123,7 @@ if __name__ == "__main__":
     # hardcoded for now
     kwargs['feature_dim'] = 2048  
     kwargs['hidden_dim'] = 1024
-    kwargs['alpha'] = 0 #Entropy set to zero by @mp
+    # kwargs['alpha'] = 0 #Entropy set to zero by @mp
     agent = ctrlsac_agent.CTRLSACAgent(**kwargs)
   elif args.alg == 'diffsrsac':
     agent = diffsrsac_agent.DIFFSRSACAgent(**kwargs)

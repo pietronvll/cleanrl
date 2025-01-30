@@ -48,7 +48,7 @@
 
 * _Wandb **group by**_: env_id, rep_loss, q_feature_train, reward_weight
 
-### 27/01/2025 - \<Exps 2\>
+### 28/01/2025 - \<Exps 2\>
 
 **Setting**
 
@@ -56,24 +56,71 @@
 * Major Changes:
     * BEFORE: train embeddings always during policy and chose to train or not during q learning-> NOW: freeze the embeddings training during q and policy training
     * BEFORE: always 1 critic layer -> NOW: we chan choose the number of critic layers (our goal is to have just one)
-    * **THERE WAS A MAJOR BUG**
-    * doing it again...
 
 
-### 27/01/2025 - \<Exps 3\>
+**Experiments**
+* The 2-layers case, reaches higher rews (400 more or less, with some sparse peaks of 1k), but the q_loss diverges after 300k steps with spectral and nce losses.
+* Generally, not working
+
+* _Wandb **group by**_: env_id, rep_loss, critic_layers
+
+### 28/01/2025 - \<Exps 3\>
 
 **Setting**
 
 * env = __Hopper-v4__
 * Major Changes:
-    * BEFORE:  freeze the embeddings training during q and policy training -> NOW: allow embedding training during policy training
-    * **THERE WAS A MAJOR BUG**
+    * BEFORE:  freeze the embeddings training during q and policy training -> NOW: NOT allow embedding training during policy training just during Q learning
 
+**Experiments**
+* Results even worse, q losses increses and converge after a few steps
+* Very Very low flat reward.
 
-### 24/01/2025 - \<Exps n\>
+* _Wandb **group by**_: env_id, rep_loss, critic_layers
+
+### 29/01/2025 - \<Exps 4\>
 
 **Setting**
 
-* env = __Hopper-v4__/__HalfCeetah-v4__
+* env = __Hopper-v4__
 * Major Changes:
-    * BEFORE:  allow embedding training during policy training -> NOW: NOT allow embedding training during policy training just during Q learning
+    * BEFORE: NOT allow embedding training during policy training just during Q learning -> NOW: allow embedding training during policy training and choose wether or not during Q learning
+
+**Experiments**
+* General, nothing is comparable to the baseline
+* Probably this is due to the incapacity of having a (almost) zero q_loss
+* NCE:
+    * Training during policy and not during critic: the q_loss diverges but only with 2 layers, it may be just an unlucky seed
+    * In the other cases, bad performance probably beacuse of the high loss of critic
+    * It seems that training during policy and critic training leads to better performance
+    * With one layer morie variance
+* Spectral:
+    * Divergence case equal to the one in NCE
+    * Conclusions are the same of above except for the fact that the bst performing is 1 layer, with training during q and policy (which is the best among all but with some variance)
+
+**Open questions**
+* Do we have to increase the embedding dim?
+* Are the number of seen state,action pairs enough diverse to learn properly embeddings?
+* Do we have to insert gradient clipping?
+* Are the networks okay in their structure?
+
+* _Wandb **group by**_: env_id, rep_loss, critic_layers, critic_feat_training, policy_feat_training
+
+
+
+### 29/01/2025 - \<Exps 5\>
+
+**Setting**
+
+* env = __Hopper-v4__
+* Major Changes:
+    * BEFORE: 256 hidden dim for feat and feat. size, 1024 batch size -> NOW: 2048 hidden dim for feat and feat. size, 2048 batch size
+    * NCE has a memory problem with these dimensions
+
+**Experiments**
+
+
+**Open questions**
+*
+
+* _Wandb **group by**_: env_id, rep_loss, critic_layers, critic_feat_training, policy_feat_training
