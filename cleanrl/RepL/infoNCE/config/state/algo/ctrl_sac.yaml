@@ -1,7 +1,7 @@
 cls: ctrl_sac
 discount: 0.99
 tau: 0.005
-alpha: 0.2
+alpha: 0 #0.2
 auto_entropy: true
 
 target_update_freq: 2 # tune

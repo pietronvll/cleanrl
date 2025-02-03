@@ -129,7 +129,7 @@ class CTRLSACAgent(SACAgent):
             state_dim, 
             action_dim, 
             action_space, 
-            lr=1e-4, # 3e-4 was originally proposed in the paper, but seems to results in fluctuating performance
+            lr=3e-4 ,#1e-4, # 3e-4 was originally proposed in the paper, but seems to results in fluctuating performance
             discount=0.99, 
             target_update_period=2,
             tau=0.005,

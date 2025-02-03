@@ -55,7 +55,7 @@ if __name__ == "__main__":
   parser.add_argument("--track", default=True)       
   parser.add_argument("--wandb_entity", default=None)        
   parser.add_argument("--wandb_project_name", default="cleanrl")        
-  parser.add_argument("--extra_feature_steps", default=3, type=int)
+  parser.add_argument("--extra_feature_steps", default=4, type=int)
   parser.add_argument("--rep_loss", default="NCE_orig", type=str) # Just for WandB tracking, DO NOT CHANGE!!
   args = parser.parse_args()
 
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     # hardcoded for now
     kwargs['feature_dim'] = 2048  
     kwargs['hidden_dim'] = 1024
-    # kwargs['alpha'] = 0 #Entropy set to zero by @mp
+    kwargs['alpha'] = 0.2 #Entropy set to zero by @mp
     agent = ctrlsac_agent.CTRLSACAgent(**kwargs)
   elif args.alg == 'diffsrsac':
     agent = diffsrsac_agent.DIFFSRSACAgent(**kwargs)
