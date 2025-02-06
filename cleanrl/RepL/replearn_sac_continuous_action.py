@@ -16,7 +16,7 @@ from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.type_aliases import ReplayBufferSamples
 from torch.utils.tensorboard import SummaryWriter
 
-from contrastive_repr import SupConLoss, SpectralConLoss, NoiseConLoss
+from contrastive_repr import SupConLoss, SpectralConLoss, NoiseConLoss, infoNCELoss
 
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_squared_error
@@ -60,7 +60,7 @@ class Args:
     """target smoothing coefficient (default: 0.005)"""
     batch_size: int = 256
     """the batch size of sample from the replay memory"""
-    cont_batch_size: int = 2048
+    cont_batch_size: int = 256 #2048
     """the batch size of sample from the replay memory"""
     learning_starts: int = int(1000) #int(1e4)
     """timestep to start learning"""
@@ -78,7 +78,7 @@ class Args:
     """the number of layers in the Q networks"""
     critic_hidden_dim: int = 256
     """the hidden dimension of the critic networks"""
-    rep_loss: str = "nce" # "supervised" or "spectral" or "nce"
+    rep_loss: str = "infonce" # "supervised" or "spectral" or "nce" or "infonce"
     """the loss function for the representation learning"""
     extra_feature_steps: int = 3
     """the number of extra feature steps to train Mu and Phi"""
@@ -396,6 +396,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         contrastive_loss = SpectralConLoss()
     elif args.rep_loss == "nce":
         contrastive_loss = NoiseConLoss(device)
+    elif args.rep_loss == "infonce":
+        contrastive_loss = infoNCELoss(device)
     else:
         raise ValueError("Unknown representation learning loss: ", args.rep_loss)
     

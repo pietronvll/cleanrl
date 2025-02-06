@@ -7,6 +7,7 @@ from __future__ import print_function
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class SpectralConLoss(nn.Module):
@@ -148,3 +149,20 @@ class NoiseConLoss(nn.Module):
         model_loss = nn.CrossEntropyLoss()
         model_loss = model_loss(contrastive, labels)
         return model_loss
+    
+
+class infoNCELoss(nn.Module):
+    """Representation Learning with Contrastive Predictive Coding: https://arxiv.org/abs/1807.03748.
+    """
+    def __init__(self, device, temperature=1):
+        super(infoNCELoss, self).__init__()
+        self.device = device
+        self.temperature = temperature
+
+    def forward(self, data: torch.Tensor, next_data: torch.Tensor):
+        # Positive keys are the entries on the diagonal
+        labels = torch.arange(data.shape[0]).to(self.device)
+
+        logits = data @ next_data.T
+
+        return F.cross_entropy(logits/self.temperature, labels, reduction='mean')
