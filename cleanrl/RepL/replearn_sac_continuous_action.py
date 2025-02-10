@@ -60,7 +60,7 @@ class Args:
     """target smoothing coefficient (default: 0.005)"""
     batch_size: int = 256
     """the batch size of sample from the replay memory"""
-    cont_batch_size: int = 256 #2048
+    cont_batch_size: int = 2048
     """the batch size of sample from the replay memory"""
     learning_starts: int = int(1000) #int(1e4)
     """timestep to start learning"""
@@ -68,27 +68,27 @@ class Args:
     """the learning rate of the policy network optimizer"""
     q_lr: float = 3e-4
     """the learning rate of the Q network network optimizer"""
-    feat_lr: float = 1e-4
+    feat_lr: float = 3e-4
     """the learning rate of the contrastive learning network optimizer"""
     policy_frequency: int = 2
     """the frequency of training policy (delayed)"""
-    target_network_frequency: int = 1  # Denis Yarats' implementation delays this by 2.
+    target_network_frequency: int = 2  # Denis Yarats' implementation delays this by 2.
     """the frequency of updates for the target nerworks"""
-    critic_layers: int = 1
+    critic_layers: int = 2
     """the number of layers in the Q networks"""
     critic_hidden_dim: int = 256
     """the hidden dimension of the critic networks"""
-    rep_loss: str = "infonce" # "supervised" or "spectral" or "nce" or "infonce"
+    rep_loss: str = "supervised" # "supervised" or "spectral" or "nce" or "infonce"
     """the loss function for the representation learning"""
-    extra_feature_steps: int = 3
+    extra_feature_steps: int = 4
     """the number of extra feature steps to train Mu and Phi"""
     use_feature_target: bool = False
     """whether to use feature target""" # NOT yet understood
     feature_dim: int = 2048
     """the dimension of the feature"""
-    feat_hidden_dim: int = 2048  
+    feat_hidden_dim: int = 1024  
     """the hidden dimension of the neural networks"""
-    cirtic_feat_training: bool = True
+    critic_feat_training: bool = True
     """whether to learn features during critic training"""
     policy_feat_training: bool = True
     """whether to learn features during policy training"""
@@ -96,7 +96,7 @@ class Args:
     """whether to use reward prediction loss"""
     reward_weight: float = 0.5
     """the weight of the reward prediction loss"""
-    alpha: float = 0
+    alpha: float = 0.2
     """Entropy regularization coefficient."""
     autotune: bool = False
     """automatic tuning of the entropy coefficient"""
@@ -164,7 +164,8 @@ class Phi(nn.Module):
         z = F.elu(self.l1(x)) 
         z = F.elu(self.l2(z)) 
         z_phi = self.l3(z)
-        z_phi = F.normalize(z_phi, p=2, dim=-1)
+        # z_phi = F.normalize(z_phi, p=2, dim=-1)
+        # z_phi = torch.clamp(z_phi, -1, 1)
         return z_phi
 
 class Mu(nn.Module):
@@ -183,14 +184,15 @@ class Mu(nn.Module):
         self.l1 = nn.Linear(state_dim , hidden_dim)
         self.l2 = nn.Linear(hidden_dim, hidden_dim)
         self.l3 = nn.Linear(hidden_dim, feature_dim)
+        
 
     def forward(self, state):
         z = F.elu(self.l1(state))
         z = F.elu(self.l2(z))
+        z_mu = self.l3(z)
         # bounded mu's output
-        z_mu = F.tanh(self.l3(z)) 
-        z_mu = F.normalize(z_mu, p=2, dim=-1)
-        # z_mu = self.l3(z)
+        # z_mu = F.tanh(self.l3(z)) 
+        # z_mu = F.normalize(z_mu, p=2, dim=-1)
         return z_mu
      
 class Theta(nn.Module):
@@ -391,6 +393,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             lr=args.feat_lr)
 
     if args.rep_loss == "supervised":
+        raise ValueError("Supervised loss not working, don't know why")
         contrastive_loss = SupConLoss(temperature=0.1)
     elif args.rep_loss == "spectral":
         contrastive_loss = SpectralConLoss()
@@ -473,6 +476,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 z_mu_next = mu(data.next_observations)
                 r_pred= theta(z_phi)
 
+
                 # contrastive loss
                 cont_loss = contrastive_loss(z_phi, z_mu_next)
                 r_prediction_loss = F.mse_loss(r_pred, data.rewards).mean()
@@ -506,7 +510,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - alpha * next_state_log_pi
                 next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
 
-            if args.cirtic_feat_training:
+            if args.critic_feat_training:
                 # Trained phi during q-learning
                 if args.use_feature_target:
                     z_phi = phi_target(data.observations, data.actions)
@@ -521,11 +525,11 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
             # optimize the model
             q_optimizer.zero_grad()
-            if args.cirtic_feat_training:
+            if args.critic_feat_training:
                 feature_optimizer.zero_grad()
             qf_loss.backward()
             q_optimizer.step()
-            if args.cirtic_feat_training:
+            if args.critic_feat_training:
                 feature_optimizer.step()
 
 
@@ -543,13 +547,13 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                     qf2_pi = qf2(z_phi)
                     min_qf_pi = torch.min(qf1_pi, qf2_pi)
                     actor_loss = ((alpha * log_pi) - min_qf_pi).mean()
-                    
+
                     actor_optimizer.zero_grad()
-                    if args.cirtic_feat_training:
+                    if args.policy_feat_training:
                         feature_optimizer.zero_grad()
                     actor_loss.backward()
                     actor_optimizer.step()
-                    if args.cirtic_feat_training:
+                    if args.policy_feat_training:
                         feature_optimizer.step()
 
                     if args.autotune:

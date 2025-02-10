@@ -14,9 +14,9 @@ CRITIC_LAYERS=${CRITIC_LAYERS:-1}
 # SEED=${SEED:0}
 
 if [ "$CRITIC_TRAINING" == "True" ]; then
-  critic_training_arg="--cirtic_feat_training"
+  critic_training_arg="--critic_feat_training"
 else
-  critic_training_arg="--no-cirtic_feat_training"
+  critic_training_arg="--no-critic_feat_training"
 fi
 
 if [ "$REP_LOSS" == "nce" ]; then
