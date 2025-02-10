@@ -393,7 +393,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             lr=args.feat_lr)
 
     if args.rep_loss == "supervised":
-        raise ValueError("Supervised loss not working, don't know why")
+        raise ValueError("Supervised loss not working, without using the nrmalization there are NaNs in the computation of the supervised loss, maybe we need to use float64 or use something as tanh to normalize")
         contrastive_loss = SupConLoss(temperature=0.1)
     elif args.rep_loss == "spectral":
         contrastive_loss = SpectralConLoss()

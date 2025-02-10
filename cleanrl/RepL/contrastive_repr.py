@@ -9,7 +9,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 class SpectralConLoss(nn.Module):
     def __init__(self):
         super(SpectralConLoss, self).__init__()
@@ -131,6 +130,7 @@ class SupConLoss(nn.Module):
         # loss
         loss = -(self.temperature / self.base_temperature) * mean_log_prob_pos
         loss = loss.view(anchor_count, batch_size).mean()
+        print(loss, "loss")
 
         return loss
 
