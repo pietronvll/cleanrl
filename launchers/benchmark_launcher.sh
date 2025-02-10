@@ -13,3 +13,4 @@ for env in $env_arr; do
       done
     done
   done
+done
