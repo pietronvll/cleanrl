@@ -7,8 +7,6 @@ cd $PBS_O_WORKDIR
 
 # # Use an optional experiment argument passed via qsub -v EXPERIMENT=...
 REP_LOSS=${REP_LOSS:-supervised}
-onal_args=""
-fi
 
 # Load environment
 source ~/.bashrc

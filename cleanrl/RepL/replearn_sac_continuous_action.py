@@ -88,9 +88,9 @@ class Args:
     """the dimension of the feature"""
     feat_hidden_dim: int = 1024  
     """the hidden dimension of the neural networks"""
-    critic_feat_training: bool = True
+    critic_feat_training: bool = False
     """whether to learn features during critic training"""
-    policy_feat_training: bool = True
+    policy_feat_training: bool = False
     """whether to learn features during policy training"""
     reward_prediction_loss: bool = True
     """whether to use reward prediction loss"""

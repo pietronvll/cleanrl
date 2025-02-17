@@ -67,9 +67,9 @@ class Args:
     """the frequency of training policy (delayed)"""
     target_network_frequency: int = 1  # Denis Yarats' implementation delays this by 2.
     """the frequency of updates for the target nerworks"""
-    alpha: float = 0 ############## TODO 0.2 default
+    alpha: float = 0.2 #default
     """Entropy regularization coefficient."""
-    autotune: bool = False ############## TODO True default
+    autotune: bool = True #default
     """automatic tuning of the entropy coefficient"""
 
 
